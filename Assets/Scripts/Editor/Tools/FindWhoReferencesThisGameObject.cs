@@ -64,7 +64,7 @@ namespace UnityLibrary.Editor
 
         private void FindReferences(GameObject target)
         {
-            var allObjects = UnityEngine.Object.FindObjectsOfType<MonoBehaviour>(true);
+            var allObjects = Object.FindObjectsByType<MonoBehaviour>(findObjectsInactive: FindObjectsInactive.Include, sortMode: FindObjectsSortMode.None);
 
             foreach (var mono in allObjects)
             {
@@ -94,20 +94,26 @@ namespace UnityLibrary.Editor
                                 }
                             }
                         }
+
+                        continue;
                     }
-                    else if (typeof(UnityEngine.Object).IsAssignableFrom(field.FieldType))
+
+                    if (!typeof(UnityEngine.Object).IsAssignableFrom(field.FieldType))
+                        continue;
+
+                    var value = field.GetValue(mono) as UnityEngine.Object;
+                    if (ReferencesTarget(value, target))
                     {
-                        var value = field.GetValue(mono) as UnityEngine.Object;
-                        if (value == target)
+                        results.Add(new ReferenceResult
                         {
-                            results.Add(new ReferenceResult
-                            {
-                                message = $"{mono.name} ({type.Name}) -> Field '{field.Name}'",
-                                owner = mono.gameObject
-                            });
-                        }
+                            message = $"{mono.name} ({type.Name}) -> Field '{field.Name}'",
+                            owner = mono.gameObject
+                        });
                     }
                 }
+
+                // Also scan serialized properties (handles public fields, [SerializeField] private, arrays/lists, etc.)
+                FindSerializedReferences(mono, target);
             }
 
             if (results.Count == 0)
@@ -118,6 +124,44 @@ namespace UnityLibrary.Editor
                     owner = null
                 });
             }
+        }
+
+        private void FindSerializedReferences(MonoBehaviour mono, GameObject target)
+        {
+            var so = new SerializedObject(mono);
+            var it = so.GetIterator();
+
+            // enterChildren=true on first call to include all fields
+            bool enterChildren = true;
+            while (it.NextVisible(enterChildren))
+            {
+                enterChildren = false;
+
+                if (it.propertyType != SerializedPropertyType.ObjectReference)
+                    continue;
+
+                var obj = it.objectReferenceValue;
+                if (!ReferencesTarget(obj, target))
+                    continue;
+
+                results.Add(new ReferenceResult
+                {
+                    message = $"{mono.name} ({mono.GetType().Name}) -> Serialized '{it.propertyPath}'",
+                    owner = mono.gameObject
+                });
+            }
+        }
+
+        private static bool ReferencesTarget(UnityEngine.Object value, GameObject target)
+        {
+            if (value == null || target == null) return false;
+
+            if (value == target) return true;
+
+            // most common case: field is Transform/Component referencing the target GO
+            if (value is Component c && c.gameObject == target) return true;
+
+            return false;
         }
     }
 }
